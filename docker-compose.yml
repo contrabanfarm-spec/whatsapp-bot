@@ -1,0 +1,24 @@
+services:
+  whatsapp-bot:
+    build: .
+    restart: unless-stopped
+    # Runs a tiny init process as PID 1 so `docker stop` signals reach Node and it exits promptly.
+    init: true
+    env_file: .env
+    environment:
+      # Pinned so a different PORT or DB_PATH in .env can't break the port mapping or the data volume.
+      PORT: 3000
+      DB_PATH: /app/data/bot.db
+    ports:
+      # Bound to localhost: the reverse proxy on this host terminates HTTPS and forwards here.
+      # Change to "3000:3000" only if the proxy runs on a different machine.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # SQLite database (dedup state, outbox, conversation history). Back this directory up.
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

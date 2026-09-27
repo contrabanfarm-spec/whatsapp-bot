@@ -1,0 +1,39 @@
+const path = require('path');
+require('dotenv').config();
+
+/*
+ * Environment variables (put these in a .env file in the project root):
+ *
+ *   WHATSAPP_TOKEN            required  Access token from Meta App Dashboard > WhatsApp > API Setup
+ *   WHATSAPP_PHONE_NUMBER_ID  required  Phone number ID (not the number itself) from WhatsApp > API Setup
+ *   WHATSAPP_VERIFY_TOKEN     required  Any secret string; enter the same value in Meta's webhook config
+ *   WHATSAPP_APP_SECRET       required  App Secret from App Dashboard > App settings > Basic; used to verify X-Hub-Signature-256
+ *   ANTHROPIC_API_KEY         required  API key from console.anthropic.com
+ *   PORT                      optional  Port to listen on (default 3000)
+ *   DB_PATH                   optional  SQLite database file (default data/bot.db)
+ */
+const REQUIRED = [
+  'WHATSAPP_TOKEN',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_VERIFY_TOKEN',
+  'WHATSAPP_APP_SECRET',
+  'ANTHROPIC_API_KEY',
+];
+
+const missing = REQUIRED.filter((key) => !process.env[key]);
+if (missing.length > 0) {
+  console.error(`Missing required environment variables: ${missing.join(', ')}`);
+  console.error('Create a .env file with the variables listed at the top of src/config.js.');
+  process.exit(1);
+}
+
+module.exports = {
+  whatsappToken: process.env.WHATSAPP_TOKEN,
+  phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+  verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+  appSecret: process.env.WHATSAPP_APP_SECRET,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  port: Number(process.env.PORT) || 3000,
+  dbPath: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'bot.db'),
+  graphApiVersion: 'v19.0',
+};

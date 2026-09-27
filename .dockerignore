@@ -1,0 +1,13 @@
+# Host node_modules may contain native binaries built for another OS (e.g. Windows better-sqlite3);
+# the image installs its own with npm ci.
+node_modules
+npm-debug.log
+
+# Secrets and data never go into the image: .env is loaded at runtime, data/ is a mounted volume.
+.env
+data
+*.db
+*.db-wal
+*.db-shm
+
+.git
