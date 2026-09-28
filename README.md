@@ -11,6 +11,7 @@ src/db.js                          SQLite schema, migrations, and queries
 src/routes/webhook.js              GET (verification) and POST (signature check, parsing) handlers
 src/services/messageProcessor.js   Per-sender queue, dedup/outbox state machine, retries, crash recovery
 src/services/ai.js                 generateAIResponse() via Claude, with the last 10 turns as context
+src/prompts/system-prompt.md       Who the bot is ("Thandi" from CareCircle support) and what it knows; edit to change its knowledge or tone
 src/services/whatsapp.js           sendMessage(to, text) via the Graph API
 Dockerfile, docker-compose.yml     Container deployment (see Deployment)
 ```
