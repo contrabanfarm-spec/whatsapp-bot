@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../config');
 const { getRecentTurns } = require('../db');
@@ -7,10 +9,9 @@ const client = new Anthropic({ apiKey: config.anthropicApiKey });
 const MODEL = 'claude-opus-5';
 const HISTORY_LIMIT = 10;
 
-const SYSTEM_PROMPT = `You are my personal assistant, chatting with me over WhatsApp.
-Help with whatever I ask: questions, planning, drafting messages, reminders to think about, quick research from what you know.
-Keep replies short and conversational, as suits a chat app. Use plain text; WhatsApp only supports *bold*, _italic_ and simple lists, not Markdown headings or tables.
-If you don't know something or can't do it (for example, you can't set real reminders or browse the web), say so plainly.`;
+// Who the bot is and what it knows about the business. Kept in its own file so it can be edited without
+// touching code; read once at startup, so restart (or rebuild the Docker image) after changing it.
+const SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8').trim();
 
 /**
  * Send the user's message to Claude along with their recent history and return the reply.
