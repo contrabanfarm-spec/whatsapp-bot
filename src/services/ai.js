@@ -9,9 +9,16 @@ const client = new Anthropic({ apiKey: config.anthropicApiKey });
 const MODEL = 'claude-opus-5';
 const HISTORY_LIMIT = 10;
 
-// Who the bot is and what it knows about the business. Kept in its own file so it can be edited without
-// touching code; read once at startup, so restart (or rebuild the Docker image) after changing it.
-const SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8').trim();
+// Who the bot is (system-prompt.md) and what it knows about the business (knowledge-base.md). Kept in their
+// own files so they can be edited without touching code; read once at startup, so restart (or rebuild the
+// Docker image) after changing either. knowledge-base.md is a verbatim copy of the chatbot knowledge base
+// kept in the carecircle-web repo (apps/marketing/docs/bot-knowledge-base.md): replace it, don't edit it here.
+const readPrompt = (name) => fs.readFileSync(path.join(__dirname, '..', 'prompts', name), 'utf8').trim();
+const SYSTEM_PROMPT = `${readPrompt('system-prompt.md')}
+
+<knowledge_base>
+${readPrompt('knowledge-base.md')}
+</knowledge_base>`;
 
 /**
  * Send the user's message to Claude along with their recent history and return the reply.

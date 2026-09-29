@@ -16,11 +16,11 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 ## Features
 
 **Thandi, the AI employee**
-- Knows CareCircle's services, cities (Johannesburg, Cape Town, Durban, Pretoria), all six plans and prices, and exactly what is and isn't safety-checked.
-- Refers account-specific requests (bookings, refunds, plan changes) to the portal or the human team, and gives emergency numbers (10111, 10177, 112) when someone's safety is at risk.
+- Knows CareCircle from its knowledge base: the free model, cities (Johannesburg, Cape Town, Durban, Pretoria), the electronic criminal record check and how caregivers pay for it (card, or FNB bank deposit), and exactly what is and isn't safety-checked.
+- Refers account-specific requests (bookings, refunds, whether a deposit has been allocated) to the portal or the human team, and gives emergency numbers (10111, 10177, 112) when someone's safety is at risk.
 - Follows POPIA (never asks for ID numbers, bank details or PINs) and is honest that she's an AI assistant when asked.
-- Reads photos (JPEG, PNG, GIF or WebP, up to 5 MB) and PDFs (up to 10 MB), such as screenshots of portal errors or invoices. She won't repeat ID or banking details shown in a file, can't verify documents like police clearances, and doesn't give medical opinions. Each PDF page costs tokens to read, so long PDFs make that reply more expensive.
-- Her instructions live in [`src/prompts/system-prompt.md`](src/prompts/system-prompt.md), editable without touching code.
+- Reads photos (JPEG, PNG, GIF or WebP, up to 5 MB) and PDFs (up to 10 MB), such as screenshots of portal errors or invoices. She won't repeat ID or banking details shown in a file, can't verify documents (and explains that CareCircle uses an electronic criminal record check, not paper police clearances), and doesn't give medical opinions. Each PDF page costs tokens to read, so long PDFs make that reply more expensive.
+- Her instructions live in [`src/prompts/system-prompt.md`](src/prompts/system-prompt.md) and her product knowledge in [`src/prompts/knowledge-base.md`](src/prompts/knowledge-base.md), both editable without touching code. `knowledge-base.md` is a verbatim copy of `apps/marketing/docs/bot-knowledge-base.md` in the carecircle-web repo: to update it, replace the file with that one and redeploy.
 
 **Reliability**
 - **No duplicate replies:** each WhatsApp message ID is recorded, so a message Meta delivers twice gets one reply.
@@ -62,7 +62,8 @@ src/db.js                          SQLite schema, migrations, and queries
 src/routes/webhook.js              GET (verification) and POST (signature check, parsing) handlers
 src/services/messageProcessor.js   Per-sender queue, dedup/outbox state machine, retries, crash recovery
 src/services/ai.js                 generateAIResponse() via Claude, with the last 10 turns as context
-src/prompts/system-prompt.md       Who the bot is ("Thandi" from CareCircle support) and what it knows; edit to change its knowledge or tone
+src/prompts/system-prompt.md       Who the bot is ("Thandi" from CareCircle support), her rules and tone
+src/prompts/knowledge-base.md      What she knows about CareCircle; verbatim copy of carecircle-web's bot-knowledge-base.md
 src/services/whatsapp.js           sendMessage(to, text) via the Graph API
 Dockerfile, docker-compose.yml     Container deployment (see Deployment)
 ```
