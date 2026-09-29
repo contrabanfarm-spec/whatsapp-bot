@@ -44,11 +44,14 @@ router.post('/', (req, res) => {
       continue;
     }
 
+    const isImage = message.type === 'image';
     enqueueIncoming({
       id: message.id,
       from: message.from,
       type: message.type,
-      text: message.type === 'text' ? message.text?.body ?? null : null,
+      // For images, text is the (optional) caption and mediaId is what's used to download the file.
+      text: message.type === 'text' ? message.text?.body ?? null : isImage ? message.image?.caption ?? null : null,
+      mediaId: isImage ? message.image?.id ?? null : null,
     });
   }
 });

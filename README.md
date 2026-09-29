@@ -9,9 +9,9 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 1. A customer sends a WhatsApp message to CareCircle's number.
 2. Meta delivers it to the server's webhook (`https://bot.thecarecircle.co.za/webhook`).
 3. The server checks the message really came from Meta, confirms it hasn't been handled before, and queues it behind any earlier messages from the same person.
-4. Text messages go to Claude with Thandi's instructions and that customer's last 10 messages, so she remembers the conversation.
+4. Text messages go to Claude with Thandi's instructions and that customer's last 10 messages, so she remembers the conversation. Photos are downloaded from Meta and sent to Claude together with their caption, so Thandi can read screenshots and see what the customer is showing her.
 5. The reply is saved, then sent back through the WhatsApp API.
-6. Images, voice notes and documents get a polite "please send text" reply; emoji reactions are ignored.
+6. Voice notes, documents and videos get a polite "please send text or a photo" reply; emoji reactions are ignored.
 
 ## Features
 
@@ -19,6 +19,7 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 - Knows CareCircle's services, cities (Johannesburg, Cape Town, Durban, Pretoria), all six plans and prices, and exactly what is and isn't safety-checked.
 - Refers account-specific requests (bookings, refunds, plan changes) to the portal or the human team, and gives emergency numbers (10111, 10177, 112) when someone's safety is at risk.
 - Follows POPIA (never asks for ID numbers, bank details or PINs) and is honest that she's an AI assistant when asked.
+- Reads photos (JPEG, PNG, GIF or WebP, up to 5 MB), such as screenshots of portal errors. She won't repeat ID or banking details shown in a photo, can't verify documents like police clearances, and doesn't give medical opinions on photos.
 - Her instructions live in [`src/prompts/system-prompt.md`](src/prompts/system-prompt.md), editable without touching code.
 
 **Reliability**
@@ -49,7 +50,7 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 
 Live: the Meta app (CareCircle, business "The Care Circle") is published, the webhook is verified, and messages flow end to end. Still open:
 - **Business verification** for The Care Circle. Until it's done, Meta caps how many new conversations the business can start each day.
-- **Media:** images and voice notes get a text-only reply for now.
+- **Media:** photos are handled; voice notes, documents and videos get a text-only reply for now.
 - **Single instance:** per-customer ordering and crash recovery assume one running server.
 
 ## Project layout
@@ -137,14 +138,14 @@ Sending the same `id` again within 24 hours is skipped as a duplicate.
 
 ## Next steps
 
-- Handle media (images, voice notes, documents): they currently get a polite "text only" reply.
+- Handle voice notes and documents (e.g. transcribe voice notes, read PDFs): they currently get a polite "text or photo only" reply.
 - Add a way to reset a conversation (e.g. a `/reset` command that deletes that sender's rows).
 
 ## Storage
 
 State lives in SQLite at `data/bot.db` (override with `DB_PATH`), created on first start:
-- `deduplication`: every WhatsApp message ID with its processing status, saved reply (outbox), and retry count. Unfinished messages are resumed at startup; rows are pruned after 24 hours.
-- `conversations`: every user message and assistant reply; the last 10 per sender are sent to Claude as context.
+- `deduplication`: every WhatsApp message ID with its processing status, saved reply (outbox), retry count, and for photos the WhatsApp media ID (so a photo can be downloaded again after a crash). Unfinished messages are resumed at startup; rows are pruned after 24 hours.
+- `conversations`: every user message and assistant reply; the last 10 per sender are sent to Claude as context. Photos themselves are never stored: they're held in memory only while Claude reads them, and history records just "[Sent a photo]" plus the caption.
 
 ## Deployment
 

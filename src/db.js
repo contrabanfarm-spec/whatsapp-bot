@@ -10,7 +10,7 @@ const STALE_PROCESSING_MS = 2 * 60 * 1000;
 const MAX_RETRIES = 3;
 
 // Bump when the deduplication schema changes; stored in SQLite's PRAGMA user_version.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /*
  * deduplication.status lifecycle:
@@ -24,10 +24,12 @@ const DEDUP_COLUMNS = `
   created_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'processing'
     CHECK (status IN ('processing', 'reply_ready', 'completed', 'failed')),
-  -- Enough of the original message to replay it after a crash (message_text is NULL for media).
+  -- Enough of the original message to replay it after a crash. message_text is the text body, or an
+  -- image's caption; media_id is the WhatsApp media ID for images, used to download the file again.
   sender_number TEXT,
   message_type TEXT,
   message_text TEXT,
+  media_id TEXT,
   reply_text TEXT,
   retry_count INTEGER NOT NULL DEFAULT 0
 `;
@@ -80,8 +82,8 @@ const statements = {
   // Inserts a new row, or takes over an unfinished row whose last attempt went stale (counting that as a
   // failed attempt). Returns the row's retry_count if claimed; returns nothing if completed/failed/in-flight.
   claimMessage: db.prepare(`
-    INSERT INTO deduplication (message_id, created_at, status, sender_number, message_type, message_text)
-    VALUES (@id, @now, 'processing', @from, @type, @text)
+    INSERT INTO deduplication (message_id, created_at, status, sender_number, message_type, message_text, media_id)
+    VALUES (@id, @now, 'processing', @from, @type, @text, @mediaId)
     ON CONFLICT (message_id) DO UPDATE SET
       created_at = excluded.created_at,
       retry_count = deduplication.retry_count + 1
@@ -96,7 +98,7 @@ const statements = {
     RETURNING retry_count
   `),
   recoverableMessages: db.prepare(`
-    SELECT message_id, sender_number, message_type, message_text FROM deduplication
+    SELECT message_id, sender_number, message_type, message_text, media_id FROM deduplication
     WHERE status IN ('processing', 'reply_ready') AND retry_count < ?
     ORDER BY created_at ASC
   `),
@@ -126,16 +128,17 @@ const statements = {
  * Try to take ownership of a live message and store what's needed to replay it. Claims it if it's new, or if
  * a previous attempt left it unfinished for over 2 minutes (assumed crash). Check and write are one statement.
  *
- * @param {{ id: string, from: string, type: string, text: string | null }} message
+ * @param {{ id: string, from: string, type: string, text: string | null, mediaId?: string | null }} message
  * @returns {number | null} the retry_count after claiming, or null if it must be skipped
  */
-function claimMessage({ id, from, type, text }) {
+function claimMessage({ id, from, type, text, mediaId }) {
   const now = Date.now();
   const row = statements.claimMessage.get({
     id,
     from,
     type,
     text: text ?? null,
+    mediaId: mediaId ?? null,
     now,
     staleBefore: now - STALE_PROCESSING_MS,
   });
@@ -155,6 +158,7 @@ function getRecoverableMessages() {
     from: row.sender_number,
     type: row.message_type,
     text: row.message_text,
+    mediaId: row.media_id,
   }));
 }
 

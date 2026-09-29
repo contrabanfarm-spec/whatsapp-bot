@@ -9,17 +9,21 @@ const {
   markCompleted,
   markFailed,
 } = require('../db');
-const { sendMessage } = require('./whatsapp');
+const { sendMessage, downloadMedia } = require('./whatsapp');
 const { generateAIResponse } = require('./ai');
 
 const WHATSAPP_MAX_TEXT_LENGTH = 4096;
+// Image formats Claude accepts, and the per-image size limit (WhatsApp's own image limit is also 5 MB).
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 // Pause before retrying a failed attempt in-process (indexed by retry_count - 1). Holding the sender's
 // lock while waiting keeps their messages in order.
 const RETRY_DELAYS_MS = [2000, 5000];
 
 /*
  * Messages here use one normalized shape, whether they came from a live webhook or from the database
- * during crash recovery:  { id, from, type, text }  where text is the body for 'text' messages, else null.
+ * during crash recovery:  { id, from, type, text, mediaId }  where text is the body of a 'text' message or
+ * an image's caption (else null), and mediaId is the WhatsApp media ID for images (else null).
  *
  * Each message moves through: processing -> reply_ready (reply saved in the outbox) -> completed (WhatsApp
  * accepted it). A crash at any point is picked up by recoverCrashedMessages() on the next start; if the
@@ -90,29 +94,67 @@ async function processMessage(message, { recovered }) {
 }
 
 async function handleMessage(message) {
-  const { id, from, type, text } = message;
+  const { id, from } = message;
 
   // Outbox: if a previous attempt already produced a reply, just deliver that one.
   if (getReplyText(id) === null) {
-    if (type !== 'text' || !text) {
-      console.log(`Received ${type} from ${from}; queuing media fallback`);
-      saveReply(id, `I received your ${type}, but I can't process media files yet. Please send text.`);
-    } else {
-      console.log(`Message from ${from}: ${text}`);
-      try {
-        const reply = await generateAIResponse(from, text);
-        saveReply(id, reply, { senderNumber: from, userText: text });
-      } catch (err) {
-        console.error(`AI generation failed for ${from}:`, err);
-        // Not saved to history: the apology isn't part of the conversation.
-        saveReply(id, "Sorry, I'm having trouble thinking right now. Please try again in a moment.");
-      }
-    }
+    const { reply, exchange } = await composeReply(message);
+    saveReply(id, reply, exchange);
   } else {
     console.log(`Message ${id} already has a saved reply; sending it without regenerating`);
   }
 
   await deliverReply(id, from);
+}
+
+/**
+ * Work out the reply for a message. Returns { reply, exchange }, where exchange (when present) is the turn to
+ * record in conversation history alongside the reply; fallbacks and apologies aren't recorded.
+ */
+async function composeReply({ from, type, text, mediaId }) {
+  if (type === 'text' && text) {
+    console.log(`Message from ${from}: ${text}`);
+    return askClaude(from, text, text);
+  }
+
+  if (type === 'image' && mediaId) {
+    console.log(`Image from ${from}${text ? ` with caption: ${text}` : ''}`);
+
+    let media;
+    try {
+      media = await downloadMedia(mediaId, { maxBytes: MAX_IMAGE_BYTES });
+    } catch (err) {
+      console.error(`Image download failed for ${from}:`, err);
+      return { reply: "Sorry, I couldn't open that photo. Could you send it again?" };
+    }
+    if (media.tooLarge) {
+      return { reply: 'That photo is too large for me to open. Could you send a smaller one, or describe it in a message?' };
+    }
+    const mediaType = media.mimeType.split(';')[0].trim().toLowerCase();
+    if (!SUPPORTED_IMAGE_TYPES.has(mediaType)) {
+      return { reply: "I can't open that kind of image. Could you send it as a normal photo instead?" };
+    }
+
+    // The image itself is never stored; history only records that a photo was sent, plus its caption.
+    const historyText = text ? `[Sent a photo] ${text}` : '[Sent a photo]';
+    return askClaude(from, text, historyText, { data: media.data, mediaType });
+  }
+
+  console.log(`Received ${type} from ${from}; queuing media fallback`);
+  return {
+    reply: `I received your ${type}, but I can only read text messages and photos for now. Please send text or a photo.`,
+  };
+}
+
+async function askClaude(from, text, historyText, image) {
+  try {
+    const reply = await generateAIResponse(from, text, image);
+    return { reply, exchange: { senderNumber: from, userText: historyText } };
+  } catch (err) {
+    console.error(`AI generation failed for ${from}:`, err);
+    // Not saved to history: the apology isn't part of the conversation.
+    return { reply: "Sorry, I'm having trouble thinking right now. Please try again in a moment." };
+  }
 }
 
 /** Send the outbox reply stored for this message, then mark it completed. Throws if the send fails. */
