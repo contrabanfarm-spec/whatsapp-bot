@@ -13,17 +13,35 @@ const { sendMessage, downloadMedia } = require('./whatsapp');
 const { generateAIResponse } = require('./ai');
 
 const WHATSAPP_MAX_TEXT_LENGTH = 4096;
-// Image formats Claude accepts, and the per-image size limit (WhatsApp's own image limit is also 5 MB).
-const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// Media Thandi can read, per WhatsApp message type. Images: the formats Claude accepts, up to Claude's
+// 5 MB per-image limit. Documents: PDFs only, capped at 10 MB because every page costs tokens to read.
+const MEDIA_KINDS = {
+  image: {
+    kind: 'image',
+    types: new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
+    maxBytes: 5 * 1024 * 1024,
+    label: 'photo',
+    tooLarge: 'That photo is too large for me to open. Could you send a smaller one, or describe it in a message?',
+    wrongType: "I can't open that kind of image. Could you send it as a normal photo instead?",
+  },
+  document: {
+    kind: 'pdf',
+    types: new Set(['application/pdf']),
+    maxBytes: 10 * 1024 * 1024,
+    label: 'PDF',
+    tooLarge: 'That document is too large for me to open (the limit is 10 MB). Could you send a smaller PDF, or tell me what you need help with?',
+    wrongType: 'I can only read documents sent as PDFs. Could you save it as a PDF and send it again, or tell me what it says?',
+  },
+};
 // Pause before retrying a failed attempt in-process (indexed by retry_count - 1). Holding the sender's
 // lock while waiting keeps their messages in order.
 const RETRY_DELAYS_MS = [2000, 5000];
 
 /*
  * Messages here use one normalized shape, whether they came from a live webhook or from the database
- * during crash recovery:  { id, from, type, text, mediaId }  where text is the body of a 'text' message or
- * an image's caption (else null), and mediaId is the WhatsApp media ID for images (else null).
+ * during crash recovery:  { id, from, type, text, mediaId, filename }  where text is the body of a 'text'
+ * message or a photo's/document's caption (else null), mediaId is the WhatsApp media ID for images and
+ * documents (else null), and filename is a document's name (live messages only; not kept for recovery).
  *
  * Each message moves through: processing -> reply_ready (reply saved in the outbox) -> completed (WhatsApp
  * accepted it). A crash at any point is picked up by recoverCrashedMessages() on the next start; if the
@@ -111,44 +129,43 @@ async function handleMessage(message) {
  * Work out the reply for a message. Returns { reply, exchange }, where exchange (when present) is the turn to
  * record in conversation history alongside the reply; fallbacks and apologies aren't recorded.
  */
-async function composeReply({ from, type, text, mediaId }) {
+async function composeReply({ from, type, text, mediaId, filename }) {
   if (type === 'text' && text) {
     console.log(`Message from ${from}: ${text}`);
     return askClaude(from, text, text);
   }
 
-  if (type === 'image' && mediaId) {
-    console.log(`Image from ${from}${text ? ` with caption: ${text}` : ''}`);
+  const media = MEDIA_KINDS[type];
+  if (media && mediaId) {
+    console.log(`${media.label} from ${from}${filename ? ` (${filename})` : ''}${text ? ` with caption: ${text}` : ''}`);
 
-    let media;
+    let file;
     try {
-      media = await downloadMedia(mediaId, { maxBytes: MAX_IMAGE_BYTES });
+      file = await downloadMedia(mediaId, { maxBytes: media.maxBytes });
     } catch (err) {
-      console.error(`Image download failed for ${from}:`, err);
-      return { reply: "Sorry, I couldn't open that photo. Could you send it again?" };
+      console.error(`${media.label} download failed for ${from}:`, err);
+      return { reply: `Sorry, I couldn't open that ${media.label}. Could you send it again?` };
     }
-    if (media.tooLarge) {
-      return { reply: 'That photo is too large for me to open. Could you send a smaller one, or describe it in a message?' };
-    }
-    const mediaType = media.mimeType.split(';')[0].trim().toLowerCase();
-    if (!SUPPORTED_IMAGE_TYPES.has(mediaType)) {
-      return { reply: "I can't open that kind of image. Could you send it as a normal photo instead?" };
-    }
+    if (file.tooLarge) return { reply: media.tooLarge };
+    const mediaType = file.mimeType.split(';')[0].trim().toLowerCase();
+    if (!media.types.has(mediaType)) return { reply: media.wrongType };
 
-    // The image itself is never stored; history only records that a photo was sent, plus its caption.
-    const historyText = text ? `[Sent a photo] ${text}` : '[Sent a photo]';
-    return askClaude(from, text, historyText, { data: media.data, mediaType });
+    // The file itself is never stored; history only records that it was sent, plus its caption.
+    const sent = `[Sent a ${media.label}${filename ? `: ${filename}` : ''}]`;
+    const historyText = text ? `${sent} ${text}` : sent;
+    const note = `${sent.slice(0, -1)}, no caption]`;
+    return askClaude(from, text, historyText, { kind: media.kind, data: file.data, mediaType, note });
   }
 
   console.log(`Received ${type} from ${from}; queuing media fallback`);
   return {
-    reply: `I received your ${type}, but I can only read text messages and photos for now. Please send text or a photo.`,
+    reply: `I received your ${type}, but I can only read text messages, photos and PDFs for now. Please send one of those.`,
   };
 }
 
-async function askClaude(from, text, historyText, image) {
+async function askClaude(from, text, historyText, attachment) {
   try {
-    const reply = await generateAIResponse(from, text, image);
+    const reply = await generateAIResponse(from, text, attachment);
     return { reply, exchange: { senderNumber: from, userText: historyText } };
   } catch (err) {
     console.error(`AI generation failed for ${from}:`, err);
