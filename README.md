@@ -1,6 +1,56 @@
-# WhatsApp Bot (Meta Cloud API)
+# CareCircle WhatsApp Bot
 
-A minimal Express server that receives WhatsApp messages through the official Meta WhatsApp Cloud API webhook, generates a reply with a pluggable AI function, and sends it back.
+A WhatsApp support bot for [CareCircle](https://thecarecircle.co.za), a South African platform that connects families with home-care and childcare caregivers. Customers message CareCircle's WhatsApp number and **Thandi**, an AI support employee powered by Anthropic's Claude, replies within seconds: she answers questions about services, pricing, safety checks and signing up, and hands people over to the human team when needed.
+
+Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express server, SQLite storage, and Docker deployment behind HTTPS.
+
+## How it works
+
+1. A customer sends a WhatsApp message to CareCircle's number.
+2. Meta delivers it to the server's webhook (`https://bot.thecarecircle.co.za/webhook`).
+3. The server checks the message really came from Meta, confirms it hasn't been handled before, and queues it behind any earlier messages from the same person.
+4. Text messages go to Claude with Thandi's instructions and that customer's last 10 messages, so she remembers the conversation.
+5. The reply is saved, then sent back through the WhatsApp API.
+6. Images, voice notes and documents get a polite "please send text" reply; emoji reactions are ignored.
+
+## Features
+
+**Thandi, the AI employee**
+- Knows CareCircle's services, cities (Johannesburg, Cape Town, Durban, Pretoria), all six plans and prices, and exactly what is and isn't safety-checked.
+- Refers account-specific requests (bookings, refunds, plan changes) to the portal or the human team, and gives emergency numbers (10111, 10177, 112) when someone's safety is at risk.
+- Follows POPIA (never asks for ID numbers, bank details or PINs) and is honest that she's an AI assistant when asked.
+- Her instructions live in [`src/prompts/system-prompt.md`](src/prompts/system-prompt.md), editable without touching code.
+
+**Reliability**
+- **No duplicate replies:** each WhatsApp message ID is recorded, so a message Meta delivers twice gets one reply.
+- **Saved replies:** every reply is stored before sending and only marked done once WhatsApp accepts it; a failed send is retried with the saved reply, without asking Claude again.
+- **Crash recovery:** on startup the server finishes any messages a previous run left half-done.
+- **Retry limit:** a message is tried at most 3 times, then marked failed, so one bad message can't crash the server over and over.
+- **Order per customer:** a person's messages are handled one at a time, in order; different customers are handled in parallel.
+- Long replies are split to fit WhatsApp's 4,096-character limit, and customers get a short apology if Claude is unavailable.
+
+**Security**
+- Every webhook's `X-Hub-Signature-256` is checked against the app secret; unsigned or forged requests get a 400.
+- Secrets live only in `.env`, which is kept out of git and out of the Docker image.
+- The container runs as a non-root user with read-only app code; the only writable place is `/app/data`.
+
+## Tech stack
+
+| Part | Technology |
+|---|---|
+| Runtime | Node.js 22+ |
+| Web server | Express 4 |
+| AI | Claude (`claude-opus-5`) via the official `@anthropic-ai/sdk`, with automatic model fallback if Claude declines a request |
+| Messaging | Meta WhatsApp Cloud API (Graph API v19.0) |
+| Database | SQLite via `better-sqlite3` |
+| Deployment | Docker + Docker Compose, with Caddy or Nginx for HTTPS |
+
+## Status
+
+Live: the Meta app (CareCircle, business "The Care Circle") is published, the webhook is verified, and messages flow end to end. Still open:
+- **Business verification** for The Care Circle. Until it's done, Meta caps how many new conversations the business can start each day.
+- **Media:** images and voice notes get a text-only reply for now.
+- **Single instance:** per-customer ordering and crash recovery assume one running server.
 
 ## Project layout
 
