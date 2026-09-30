@@ -6,9 +6,11 @@ const {
   incrementRetry,
   getReplyText,
   saveReply,
+  getLastAwayNotice,
   markCompleted,
   markFailed,
 } = require('../db');
+const { getOfflineState, awayMessage } = require('../offline');
 const { sendMessage, downloadMedia } = require('./whatsapp');
 const { generateAIResponse } = require('./ai');
 
@@ -36,6 +38,9 @@ const MEDIA_KINDS = {
 // Pause before retrying a failed attempt in-process (indexed by retry_count - 1). Holding the sender's
 // lock while waiting keeps their messages in order.
 const RETRY_DELAYS_MS = [2000, 5000];
+// When Claude can't be reached, send a person the away message at most this often, so a run of failures
+// (an outage, a billing problem) doesn't answer every message with it.
+const AI_FAILURE_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
 
 /*
  * Messages here use one normalized shape, whether they came from a live webhook or from the database
@@ -116,8 +121,12 @@ async function handleMessage(message) {
 
   // Outbox: if a previous attempt already produced a reply, just deliver that one.
   if (getReplyText(id) === null) {
-    const { reply, exchange } = await composeReply(message);
-    saveReply(id, reply, exchange);
+    const { reply, exchange, awayNotice } = await composeReply(message);
+    if (reply === null) {
+      markCompleted(id);
+      return;
+    }
+    saveReply(id, reply, exchange, awayNotice ? from : undefined);
   } else {
     console.log(`Message ${id} already has a saved reply; sending it without regenerating`);
   }
@@ -127,9 +136,18 @@ async function handleMessage(message) {
 
 /**
  * Work out the reply for a message. Returns { reply, exchange }, where exchange (when present) is the turn to
- * record in conversation history alongside the reply; fallbacks and apologies aren't recorded.
+ * record in conversation history alongside the reply; fallbacks and apologies aren't recorded. The away
+ * message comes back as { reply, awayNotice: true }, and { reply: null } means send nothing.
  */
 async function composeReply({ from, type, text, mediaId, filename }) {
+  // Checked first, so nothing is downloaded or sent to Claude while Thandi is offline. The message is only
+  // logged: it isn't answered, now or when she's back.
+  const offline = getOfflineState();
+  if (offline) {
+    console.log(`Offline: ${type} from ${from}${text ? `: ${text}` : ''}`);
+    return awayReply(from, offline.since, offline.note);
+  }
+
   if (type === 'text' && text) {
     console.log(`Message from ${from}: ${text}`);
     return askClaude(from, text, text);
@@ -169,9 +187,22 @@ async function askClaude(from, text, historyText, attachment) {
     return { reply, exchange: { senderNumber: from, userText: historyText } };
   } catch (err) {
     console.error(`AI generation failed for ${from}:`, err);
-    // Not saved to history: the apology isn't part of the conversation.
-    return { reply: "Sorry, I'm having trouble thinking right now. Please try again in a moment." };
+    // Not saved to history. The away message gives them the team's contact details instead of a dead end.
+    return awayReply(from, Date.now() - AI_FAILURE_NOTICE_INTERVAL_MS, null);
   }
+}
+
+/**
+ * The away message for this sender, or { reply: null } if they've already had it since `since`: once per
+ * offline period, or once per AI_FAILURE_NOTICE_INTERVAL_MS while Claude can't be reached.
+ */
+function awayReply(from, since, note) {
+  const last = getLastAwayNotice(from);
+  if (last !== null && last >= since) {
+    console.log(`${from} already has the away message; not replying`);
+    return { reply: null };
+  }
+  return { reply: awayMessage(note), awayNotice: true };
 }
 
 /** Send the outbox reply stored for this message, then mark it completed. Throws if the send fails. */

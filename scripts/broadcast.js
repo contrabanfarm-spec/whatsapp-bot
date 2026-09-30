@@ -33,6 +33,7 @@ const { setTimeout: sleep } = require('timers/promises');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const Database = require('better-sqlite3');
 const config = require('../src/config');
+const { getOfflineState } = require('../src/offline');
 
 // Templates this script can send. Each must match an APPROVED template in WhatsApp Manager with the same
 // name. Meta sends the text it approved, not these copies; they're here so the text submitted to Meta and the
@@ -342,6 +343,9 @@ async function main() {
   const testMode = args.to !== undefined;
   if (template.needsContacts && !args.contacts && !testMode) {
     throw new Error(`${templateName} is only sent to a --contacts list, never to everyone who has messaged the bot`);
+  }
+  if (!args['dry-run'] && getOfflineState()) {
+    throw new Error('Thandi is offline, so replies would only get the away message. Run: node scripts/offline.js off');
   }
   // What fills {{1}}, or null when the template has no {{1}}.
   const greetingName = (firstName) => (template.body.includes('{{1}}') ? firstName ?? 'there' : null);

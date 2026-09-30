@@ -49,6 +49,13 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_conversations_sender_time
     ON conversations (sender_number, timestamp);
+
+  -- When each person was last sent the away message (src/offline.js), so they get it only once per
+  -- offline period.
+  CREATE TABLE IF NOT EXISTS away_notices (
+    sender_number TEXT PRIMARY KEY,
+    notified_at INTEGER NOT NULL
+  );
 `);
 
 // Create the deduplication table, or bring one from an earlier version up to date.
@@ -111,6 +118,11 @@ const statements = {
   markFailed: db.prepare("UPDATE deduplication SET status = 'failed' WHERE message_id = ?"),
   // Covers every status, so 'failed' rows are removed too once they're a day old.
   deleteOldDedup: db.prepare('DELETE FROM deduplication WHERE created_at < ?'),
+  lastAwayNotice: db.prepare('SELECT notified_at FROM away_notices WHERE sender_number = ?'),
+  recordAwayNotice: db.prepare(`
+    INSERT INTO away_notices (sender_number, notified_at) VALUES (?, ?)
+    ON CONFLICT (sender_number) DO UPDATE SET notified_at = excluded.notified_at
+  `),
   insertTurn: db.prepare(
     'INSERT INTO conversations (sender_number, role, content, timestamp) VALUES (?, ?, ?, ?)'
   ),
@@ -174,16 +186,24 @@ function getReplyText(messageId) {
 
 /**
  * Put a generated reply in the outbox (status 'reply_ready'). When `exchange` is given, the conversation
- * turns are saved in the same transaction, so history and outbox can never disagree after a crash.
+ * turns are saved in the same transaction, so history and outbox can never disagree after a crash. When
+ * `awayNoticeTo` is given, the reply is the away message and that sender is recorded as having had it, also
+ * in the same transaction, so a crash can't leave them told twice or never.
  */
-const saveReply = db.transaction((messageId, replyText, exchange) => {
+const saveReply = db.transaction((messageId, replyText, exchange, awayNoticeTo) => {
   if (exchange) {
     const now = Date.now();
     statements.insertTurn.run(exchange.senderNumber, 'user', exchange.userText, now);
     statements.insertTurn.run(exchange.senderNumber, 'assistant', replyText, now);
   }
+  if (awayNoticeTo) statements.recordAwayNotice.run(awayNoticeTo, Date.now());
   statements.setReplyReady.run(replyText, messageId);
 });
+
+/** When this sender was last sent the away message (ms since epoch), or null if never. */
+function getLastAwayNotice(senderNumber) {
+  return statements.lastAwayNotice.get(senderNumber)?.notified_at ?? null;
+}
 
 function markCompleted(messageId) {
   statements.markCompleted.run(messageId);
@@ -212,6 +232,7 @@ module.exports = {
   incrementRetry,
   getReplyText,
   saveReply,
+  getLastAwayNotice,
   markCompleted,
   markFailed,
   cleanupDeduplication,
