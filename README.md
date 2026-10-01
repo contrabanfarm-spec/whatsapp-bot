@@ -1,6 +1,6 @@
 # CareCircle WhatsApp Bot
 
-A WhatsApp support bot for [CareCircle](https://thecarecircle.co.za), a South African platform that connects families with home-care and childcare caregivers. Customers message CareCircle's WhatsApp number and **Thandi**, an AI support employee powered by Anthropic's Claude, replies within seconds: she answers questions about services, pricing, safety checks and signing up, and hands people over to the human team when needed.
+A WhatsApp support bot for [CareCircle](https://thecarecircle.co.za), a South African platform that connects families with home-care and childcare caregivers. Customers message CareCircle's WhatsApp number and **Thandi**, an AI support employee powered by Qwen through OpenRouter (or Anthropic's Claude, if you prefer), replies within seconds: she answers questions about services, pricing, safety checks and signing up, and hands people over to the human team when needed.
 
 Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express server, SQLite storage, and Docker deployment behind HTTPS.
 
@@ -9,7 +9,7 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 1. A customer sends a WhatsApp message to CareCircle's number.
 2. Meta delivers it to the server's webhook (`https://bot.thecarecircle.co.za/webhook`).
 3. The server checks the message really came from Meta, confirms it hasn't been handled before, and queues it behind any earlier messages from the same person.
-4. Text messages go to Claude with Thandi's instructions and that customer's last 10 messages, so she remembers the conversation. Photos and PDFs are downloaded from Meta and sent to Claude together with their caption, so Thandi can read screenshots, invoices and other documents the customer shares.
+4. Text messages go to the AI model with Thandi's instructions and that customer's last 10 messages, so she remembers the conversation. Photos and PDFs are downloaded from Meta and sent to the model together with their caption, so Thandi can read screenshots, invoices and other documents the customer shares.
 5. The reply is saved, then sent back through the WhatsApp API.
 6. Voice notes, videos and non-PDF documents get a polite "please send text, a photo or a PDF" reply; emoji reactions are ignored.
 
@@ -24,11 +24,11 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 
 **Reliability**
 - **No duplicate replies:** each WhatsApp message ID is recorded, so a message Meta delivers twice gets one reply.
-- **Saved replies:** every reply is stored before sending and only marked done once WhatsApp accepts it; a failed send is retried with the saved reply, without asking Claude again.
+- **Saved replies:** every reply is stored before sending and only marked done once WhatsApp accepts it; a failed send is retried with the saved reply, without asking the AI again.
 - **Crash recovery:** on startup the server finishes any messages a previous run left half-done.
 - **Retry limit:** a message is tried at most 3 times, then marked failed, so one bad message can't crash the server over and over.
 - **Order per customer:** a person's messages are handled one at a time, in order; different customers are handled in parallel.
-- Long replies are split to fit WhatsApp's 4,096-character limit, and customers get a short apology if Claude is unavailable.
+- Long replies are split to fit WhatsApp's 4,096-character limit, and customers get a short apology if the AI is unavailable.
 
 **Security**
 - Every webhook's `X-Hub-Signature-256` is checked against the app secret; unsigned or forged requests get a 400.
@@ -41,7 +41,7 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 |---|---|
 | Runtime | Node.js 22+ |
 | Web server | Express 4 |
-| AI | Claude (`claude-opus-5`) via the official `@anthropic-ai/sdk`, with automatic model fallback if Claude declines a request |
+| AI | Qwen (`qwen/qwen3.8-flash` by default, set with `AI_MODEL`) via OpenRouter's chat completions API. Without an OpenRouter key it falls back to Claude (`claude-opus-5`) via the official `@anthropic-ai/sdk` |
 | Messaging | Meta WhatsApp Cloud API (Graph API v19.0) |
 | Database | SQLite via `better-sqlite3` |
 | Deployment | Docker + Docker Compose, with Caddy or Nginx for HTTPS |
@@ -61,7 +61,7 @@ src/config.js                      Loads and validates environment variables (fu
 src/db.js                          SQLite schema, migrations, and queries
 src/routes/webhook.js              GET (verification) and POST (signature check, parsing) handlers
 src/services/messageProcessor.js   Per-sender queue, dedup/outbox state machine, retries, crash recovery
-src/services/ai.js                 generateAIResponse() via Claude, with the last 10 turns as context
+src/services/ai.js                 generateAIResponse() via OpenRouter (Qwen) or Anthropic (Claude), with the last 10 turns as context
 src/prompts/system-prompt.md       Who the bot is ("Thandi" from CareCircle support), her rules and tone
 src/prompts/knowledge-base.md      What she knows about CareCircle; verbatim copy of carecircle-web's bot-knowledge-base.md
 src/services/whatsapp.js           sendMessage(to, text) via the Graph API
@@ -84,7 +84,11 @@ Dockerfile, docker-compose.yml     Container deployment (see Deployment)
    - `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID`: from **WhatsApp > API Setup** in the Meta App Dashboard. The temporary token expires after 24 hours; create a System User token for anything long-lived.
    - `WHATSAPP_VERIFY_TOKEN`: any random string you choose. You'll paste the same value into Meta in step 3 below.
    - `WHATSAPP_APP_SECRET`: from **App settings > Basic** in the Meta App Dashboard. Used to verify the `X-Hub-Signature-256` header on every webhook POST; unsigned or mis-signed requests get a 400.
-   - `ANTHROPIC_API_KEY`: from [console.anthropic.com](https://console.anthropic.com). Replies are generated by Claude (`claude-opus-5`).
+   - `OPENROUTER_API_KEY`: from [openrouter.ai/keys](https://openrouter.ai/keys). Replies come from Qwen (`qwen/qwen3.8-flash`) through OpenRouter. Write it as `OPENROUTER_API_KEY=sk-or-v1-...` with no `export` in front.
+   - `AI_MODEL` (optional): any OpenRouter model ID, e.g. `qwen/qwen3.8-max-0902` for stronger answers at a higher price. Pick a model that accepts images if you want photos read.
+   - `ANTHROPIC_API_KEY` (alternative): from [console.anthropic.com](https://console.anthropic.com). Used only when no OpenRouter key is set; replies then come from Claude (`claude-opus-5`).
+
+   PDFs on OpenRouter: Qwen models don't read PDFs natively, so OpenRouter's free `pdf-text` engine extracts the text first. Text PDFs (invoices, CVs) work; scanned, image-only PDFs yield little.
    - `PORT`: defaults to `3000`.
 
    The full list is also documented at the top of `src/config.js`.
@@ -111,7 +115,7 @@ Or use `npm run dev` to restart automatically on file changes.
    - **Verify token:** the value of `WHATSAPP_VERIFY_TOKEN`
    - Click **Verify and save**. The server logs `Webhook verified`.
 4. Under **Webhook fields**, subscribe to **messages**.
-5. Send a WhatsApp message from your test number to the bot's number. You should see `Message from ...` in the logs and receive Claude's reply.
+5. Send a WhatsApp message from your test number to the bot's number. You should see `Message from ...` in the logs and receive Thandi's reply.
 
 The ngrok URL changes each time ngrok restarts (unless you have a reserved domain), so update the callback URL in Meta whenever it does.
 
@@ -135,7 +139,7 @@ Sending the same `id` again within 24 hours is skipped as a duplicate.
 
 ## Error handling
 
-`POST /webhook` returns 400 if the signature is invalid. Otherwise it responds `200 OK` before doing any work, and all parsing, AI, and send errors are caught and logged. Malformed JSON bodies on `/webhook` also get a 200. This prevents Meta from retrying failed deliveries. If the Claude call fails, the user gets a short apology instead of silence.
+`POST /webhook` returns 400 if the signature is invalid. Otherwise it responds `200 OK` before doing any work, and all parsing, AI, and send errors are caught and logged. Malformed JSON bodies on `/webhook` also get a 200. This prevents Meta from retrying failed deliveries. If the AI call fails, the user gets a short apology instead of silence.
 
 ## Next steps
 
@@ -146,7 +150,7 @@ Sending the same `id` again within 24 hours is skipped as a duplicate.
 
 State lives in SQLite at `data/bot.db` (override with `DB_PATH`), created on first start:
 - `deduplication`: every WhatsApp message ID with its processing status, saved reply (outbox), retry count, and for photos and PDFs the WhatsApp media ID (so the file can be downloaded again after a crash). Unfinished messages are resumed at startup; rows are pruned after 24 hours.
-- `conversations`: every user message and assistant reply; the last 10 per sender are sent to Claude as context. Photos and PDFs themselves are never stored: they're held in memory only while Claude reads them, and history records just "[Sent a photo]" or "[Sent a PDF: name]" plus the caption.
+- `conversations`: every user message and assistant reply; the last 10 per sender are sent to the AI as context. Photos and PDFs themselves are never stored: they're held in memory only while the AI reads them, and history records just "[Sent a photo]" or "[Sent a PDF: name]" plus the caption.
 
 ## Deployment
 
