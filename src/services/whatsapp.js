@@ -67,4 +67,34 @@ async function downloadMedia(mediaId, { maxBytes = Infinity } = {}) {
   return { tooLarge: false, data, mimeType: meta.mime_type || fileResponse.headers.get('content-type') || '' };
 }
 
-module.exports = { sendMessage, downloadMedia };
+/**
+ * Mark a received message as read (blue ticks) and show "typing…" in the customer's chat. WhatsApp hides
+ * the indicator when we reply or after 25 seconds, whichever comes first. Throws if the API rejects it.
+ *
+ * @param {string} messageId  The incoming message's WhatsApp ID (wamid…)
+ */
+async function markReadWithTyping(messageId) {
+  const url = `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneNumberId}/messages`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.whatsappToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = data.error ? `${data.error.message} (code ${data.error.code})` : response.statusText;
+    throw new Error(`WhatsApp API error ${response.status}: ${detail}`);
+  }
+}
+
+module.exports = { sendMessage, downloadMedia, markReadWithTyping };

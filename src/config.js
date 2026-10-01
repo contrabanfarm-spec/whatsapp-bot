@@ -45,5 +45,7 @@ module.exports = {
   replyDelayMs: Math.max(0, Number(process.env.REPLY_DELAY_SECONDS ?? 30) || 0) * 1000,
   port: Number(process.env.PORT) || 3000,
   dbPath: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'bot.db'),
-  graphApiVersion: 'v19.0',
+  // Graph API version for all WhatsApp calls. v26.0 is current and what Meta's typing-indicator docs use;
+  // the message and media endpoints used here are unchanged from earlier versions.
+  graphApiVersion: 'v26.0',
 };

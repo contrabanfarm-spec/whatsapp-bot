@@ -12,7 +12,7 @@ const {
   markFailed,
 } = require('../db');
 const { getOfflineState, awayMessage } = require('../offline');
-const { sendMessage, downloadMedia } = require('./whatsapp');
+const { sendMessage, downloadMedia, markReadWithTyping } = require('./whatsapp');
 const { generateAIResponse } = require('./ai');
 
 const WHATSAPP_MAX_TEXT_LENGTH = 4096;
@@ -39,6 +39,8 @@ const MEDIA_KINDS = {
 // Pause before retrying a failed attempt in-process (indexed by retry_count - 1). Holding the sender's
 // lock while waiting keeps their messages in order.
 const RETRY_DELAYS_MS = [2000, 5000];
+// How long WhatsApp keeps a typing indicator visible before hiding it on its own.
+const TYPING_INDICATOR_MS = 25_000;
 // When Claude can't be reached, send a person the away message at most this often, so a run of failures
 // (an outage, a billing problem) doesn't answer every message with it.
 const AI_FAILURE_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
@@ -119,21 +121,47 @@ async function processMessage(message, { recovered }) {
 
 async function handleMessage(message) {
   const { id, from } = message;
+  const typing = scheduleTypingIndicator(message);
 
-  // Outbox: if a previous attempt already produced a reply, just deliver that one.
-  if (getReplyText(id) === null) {
-    const { reply, exchange, awayNotice } = await composeReply(message);
-    if (reply === null) {
-      markCompleted(id);
-      return;
+  try {
+    // Outbox: if a previous attempt already produced a reply, just deliver that one.
+    if (getReplyText(id) === null) {
+      const { reply, exchange, awayNotice } = await composeReply(message);
+      if (reply === null) {
+        // No reply is coming, so don't mark it read or show "typing…" either.
+        markCompleted(id);
+        return;
+      }
+      saveReply(id, reply, exchange, awayNotice ? from : undefined);
+    } else {
+      console.log(`Message ${id} already has a saved reply; sending it without regenerating`);
     }
-    saveReply(id, reply, exchange, awayNotice ? from : undefined);
-  } else {
-    console.log(`Message ${id} already has a saved reply; sending it without regenerating`);
-  }
 
-  await waitForReplyTime(message);
-  await deliverReply(id, from);
+    await waitForReplyTime(message);
+    await deliverReply(id, from);
+  } finally {
+    typing.cancel();
+  }
+}
+
+/**
+ * Mark the message read and show "typing…" timed to end with the reply: WhatsApp shows the indicator for at
+ * most TYPING_INDICATOR_MS, so it's triggered that long before the reply is due (with the default 30 s delay,
+ * about 5 s after the message arrived), or straight away if the delay is shorter. Live messages only:
+ * recovered ones are old and replied to immediately. Best effort: a failure is logged, never fatal.
+ */
+function scheduleTypingIndicator(message) {
+  if (!message.receivedAt || message.typingShown) return { cancel() {} };
+
+  const showAt = message.receivedAt + Math.max(0, config.replyDelayMs - TYPING_INDICATOR_MS);
+  const timer = setTimeout(() => {
+    message.typingShown = true; // once per message, even across retries
+    markReadWithTyping(message.id).catch((err) => {
+      console.warn(`Couldn't mark ${message.id} read / show typing: ${err.message}`);
+    });
+  }, Math.max(0, showAt - Date.now()));
+
+  return { cancel: () => clearTimeout(timer) };
 }
 
 /**

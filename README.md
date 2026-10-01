@@ -42,7 +42,7 @@ Built on the official **Meta WhatsApp Cloud API**, with a small Node.js/Express 
 | Runtime | Node.js 22+ |
 | Web server | Express 4 |
 | AI | Qwen (`qwen/qwen3.8-flash` by default, set with `AI_MODEL`) via OpenRouter's chat completions API. Without an OpenRouter key it falls back to Claude (`claude-opus-5`) via the official `@anthropic-ai/sdk` |
-| Messaging | Meta WhatsApp Cloud API (Graph API v19.0) |
+| Messaging | Meta WhatsApp Cloud API (Graph API v26.0) |
 | Database | SQLite via `better-sqlite3` |
 | Deployment | Docker + Docker Compose, with Caddy or Nginx for HTTPS |
 
@@ -88,7 +88,7 @@ Dockerfile, docker-compose.yml     Container deployment (see Deployment)
    - `AI_MODEL` (optional): any OpenRouter model ID, e.g. `qwen/qwen3.8-max-0902` for stronger answers at a higher price. Pick a model that accepts images if you want photos read.
    - `ANTHROPIC_API_KEY` (alternative): from [console.anthropic.com](https://console.anthropic.com). Used only when no OpenRouter key is set; replies then come from Claude (`claude-opus-5`).
 
-   - `REPLY_DELAY_SECONDS` (optional, default `30`): how long after a customer's message Thandi replies, so answers don't arrive suspiciously fast. It counts from when the message arrived, so AI time is included rather than added; `0` replies as soon as the answer is ready.
+   - `REPLY_DELAY_SECONDS` (optional, default `30`): how long after a customer's message Thandi replies, so answers don't arrive suspiciously fast. It counts from when the message arrived, so AI time is included rather than added; `0` replies as soon as the answer is ready. While the customer waits, Thandi marks their message as read (blue ticks) and shows "typing…". WhatsApp keeps the indicator up for at most 25 seconds, so it starts 25 seconds before the reply is due (about 5 seconds after the message arrives with the default delay).
 
    PDFs on OpenRouter: Qwen models don't read PDFs natively, so OpenRouter's free `pdf-text` engine extracts the text first. Text PDFs (invoices, CVs) work; scanned, image-only PDFs yield little.
    - `PORT`: defaults to `3000`.
