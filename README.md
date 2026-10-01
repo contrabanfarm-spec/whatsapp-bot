@@ -182,6 +182,14 @@ To deploy a new version, pull or copy the new code and run `docker compose up -d
 
 Compose pins `PORT=3000` and `DB_PATH=/app/data/bot.db` inside the container, so those two values in `.env` are ignored there. The container port is published on `127.0.0.1:3000` only, so it's reachable by a reverse proxy on the same machine but not directly from the internet.
 
+### Watch conversations live
+
+To see customers' messages and Thandi's replies as they happen, run on the server:
+```bash
+docker compose exec whatsapp-bot node scripts/watch.js
+```
+It shows the last 10 messages, then follows new ones (Ctrl+C to stop). Pass a number for more or less history, e.g. `node scripts/watch.js 50`, or `0` for new messages only. Every incoming message is shown (text, photos and PDFs with their captions, other media by type) along with the reply that was actually sent, including fallbacks and away messages, and any reply that failed. It opens the database read-only, so it can't affect the bot. Times are SA time, and history goes back at most 24 hours. When one person sends several messages in a row, each later one appears once Thandi starts on it, right after her previous reply.
+
 ### Back up `./data`
 
 > **Warning:** `./data` holds the SQLite database: conversation history, the reply outbox, and deduplication state. It is not inside the image, and deleting it, or the server's disk failing, loses all of it. **Back it up regularly.**
