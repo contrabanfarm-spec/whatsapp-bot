@@ -12,6 +12,7 @@ require('dotenv').config();
  *   ANTHROPIC_API_KEY         these     API key from console.anthropic.com; used (with Claude) only if no OpenRouter key
  *   AI_MODEL                  optional  Model to use, e.g. qwen/qwen3.8-max-0902 (default qwen/qwen3.8-flash on
  *                                       OpenRouter, claude-opus-5 on Anthropic)
+ *   REPLY_DELAY_SECONDS       optional  Wait this long after a message arrives before replying (default 30; 0 = off)
  *   PORT                      optional  Port to listen on (default 3000)
  *   DB_PATH                   optional  SQLite database file (default data/bot.db)
  */
@@ -40,6 +41,8 @@ module.exports = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   aiModel: process.env.AI_MODEL,
+  // Counted from when the message arrived, so AI thinking time is part of the wait, not added to it.
+  replyDelayMs: Math.max(0, Number(process.env.REPLY_DELAY_SECONDS ?? 30) || 0) * 1000,
   port: Number(process.env.PORT) || 3000,
   dbPath: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'bot.db'),
   graphApiVersion: 'v19.0',

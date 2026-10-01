@@ -88,6 +88,8 @@ Dockerfile, docker-compose.yml     Container deployment (see Deployment)
    - `AI_MODEL` (optional): any OpenRouter model ID, e.g. `qwen/qwen3.8-max-0902` for stronger answers at a higher price. Pick a model that accepts images if you want photos read.
    - `ANTHROPIC_API_KEY` (alternative): from [console.anthropic.com](https://console.anthropic.com). Used only when no OpenRouter key is set; replies then come from Claude (`claude-opus-5`).
 
+   - `REPLY_DELAY_SECONDS` (optional, default `30`): how long after a customer's message Thandi replies, so answers don't arrive suspiciously fast. It counts from when the message arrived, so AI time is included rather than added; `0` replies as soon as the answer is ready.
+
    PDFs on OpenRouter: Qwen models don't read PDFs natively, so OpenRouter's free `pdf-text` engine extracts the text first. Text PDFs (invoices, CVs) work; scanned, image-only PDFs yield little.
    - `PORT`: defaults to `3000`.
 

@@ -54,6 +54,7 @@ router.post('/', (req, res) => {
       text: message.type === 'text' ? message.text?.body ?? null : media?.caption ?? null,
       mediaId: media?.id ?? null,
       filename: media?.filename ?? null,
+      receivedAt: Date.now(), // the reply delay counts from here
     });
   }
 });

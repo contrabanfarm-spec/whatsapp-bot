@@ -1,3 +1,4 @@
+const config = require('../config');
 const {
   MAX_RETRIES,
   claimMessage,
@@ -131,7 +132,22 @@ async function handleMessage(message) {
     console.log(`Message ${id} already has a saved reply; sending it without regenerating`);
   }
 
+  await waitForReplyTime(message);
   await deliverReply(id, from);
+}
+
+/**
+ * Hold the reply until REPLY_DELAY_SECONDS after the message arrived. The reply is already saved, so a crash
+ * during the wait is recovered and sent on restart. Counting from arrival means AI time is part of the wait,
+ * and a message that queued behind the same sender's earlier ones isn't delayed a second time. Recovered
+ * messages have no arrival time and go straight out, since they're already late.
+ */
+async function waitForReplyTime({ id, receivedAt }) {
+  if (!receivedAt || !config.replyDelayMs) return;
+  const remaining = receivedAt + config.replyDelayMs - Date.now();
+  if (remaining <= 0) return;
+  console.log(`Holding reply to message ${id} for ${Math.round(remaining / 1000)}s`);
+  await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
 /**
