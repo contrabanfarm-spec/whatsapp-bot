@@ -11,6 +11,13 @@ const anthropic = USE_OPENROUTER ? null : new Anthropic({ apiKey: config.anthrop
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_TIMEOUT_MS = 120_000;
+// Rate limits (429) and temporary server errors usually clear within seconds, so retry them after these
+// pauses before giving up; otherwise a brief one sends the person the away message. A Retry-After header
+// can lengthen a pause, up to OPENROUTER_MAX_RETRY_WAIT_MS. Other errors (no credit, bad request) aren't
+// retried, since trying again can't fix them.
+const OPENROUTER_RETRY_DELAYS_MS = [2000, 5000];
+const OPENROUTER_MAX_RETRY_WAIT_MS = 15_000;
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const HISTORY_LIMIT = 10;
 
 const REFUSAL_REPLY = "Sorry, I can't help with that one.";
@@ -70,29 +77,24 @@ async function askOpenRouter(pastTurns, messageText, attachment) {
     if (attachment.kind === 'pdf') plugins = [{ id: 'file-parser', pdf: { engine: 'pdf-text' } }];
   }
 
-  const response = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.openrouterApiKey}`,
-      'Content-Type': 'application/json',
-      // Optional attribution headers OpenRouter uses to identify the app in its dashboard.
-      'HTTP-Referer': 'https://thecarecircle.co.za',
-      'X-Title': 'CareCircle WhatsApp Bot',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 8000,
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...pastTurns, { role: 'user', content: userContent }],
-      ...(plugins && { plugins }),
-    }),
-    signal: AbortSignal.timeout(OPENROUTER_TIMEOUT_MS),
+  const body = JSON.stringify({
+    model: MODEL,
+    max_tokens: 8000,
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...pastTurns, { role: 'user', content: userContent }],
+    ...(plugins && { plugins }),
   });
 
-  // OpenRouter can report an error in the body even with a 200 status, so check both.
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.error) {
-    const detail = data.error ? `${data.error.message} (code ${data.error.code})` : response.statusText;
-    throw new Error(`OpenRouter error ${response.status}: ${detail}`);
+  let data;
+  for (let attempt = 0; !data; attempt++) {
+    try {
+      data = await postToOpenRouter(body);
+    } catch (err) {
+      const delay = OPENROUTER_RETRY_DELAYS_MS[attempt];
+      if (!err.retryable || delay === undefined) throw err;
+      const wait = Math.min(Math.max(delay, err.retryAfterMs ?? 0), OPENROUTER_MAX_RETRY_WAIT_MS);
+      console.warn(`${err.message}; retrying in ${wait / 1000}s (attempt ${attempt + 2} of ${OPENROUTER_RETRY_DELAYS_MS.length + 1})`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
   }
 
   const choice = data.choices?.[0];
@@ -100,6 +102,43 @@ async function askOpenRouter(pastTurns, messageText, attachment) {
   const content = choice?.message?.content;
   const text = Array.isArray(content) ? content.map((part) => part.text || '').join('') : content || '';
   return text.trim();
+}
+
+/**
+ * One request to OpenRouter; returns the parsed response. Throws on failure, with `retryable` set on rate
+ * limits, temporary server errors and network failures, and `retryAfterMs` when the response says how long
+ * to wait. A timeout isn't retried: it has already waited OPENROUTER_TIMEOUT_MS.
+ */
+async function postToOpenRouter(body) {
+  let response;
+  try {
+    response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.openrouterApiKey}`,
+        'Content-Type': 'application/json',
+        // Optional attribution headers OpenRouter uses to identify the app in its dashboard.
+        'HTTP-Referer': 'https://thecarecircle.co.za',
+        'X-Title': 'CareCircle WhatsApp Bot',
+      },
+      body,
+      signal: AbortSignal.timeout(OPENROUTER_TIMEOUT_MS),
+    });
+  } catch (err) {
+    err.retryable = err.name !== 'TimeoutError';
+    throw err;
+  }
+
+  // OpenRouter can report an error in the body even with a 200 status, so check both.
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    const detail = data.error ? `${data.error.message} (code ${data.error.code})` : response.statusText;
+    const err = new Error(`OpenRouter error ${response.status}: ${detail}`);
+    err.retryable = RETRYABLE_STATUSES.has(response.ok ? Number(data.error.code) : response.status);
+    err.retryAfterMs = Number(response.headers.get('retry-after')) * 1000 || 0;
+    throw err;
+  }
+  return data;
 }
 
 /** Anthropic's Messages API (Claude). Returns the reply text ('' if the model said nothing). */
